@@ -81,6 +81,19 @@ func TestUserService_CreateUser(t *testing.T) {
 			expectedError: false,
 		},
 		{
+			name: "successful creation with IsActive set to false",
+			request: models.UserRequest{
+				Name:     "Jane Doe",
+				Email:    "jane@example.com",
+				Age:      25,
+				IsActive: boolPtr(false),
+			},
+			existingUser:  nil,
+			existingErr:   errors.New("user not found"),
+			createErr:     nil,
+			expectedError: false,
+		},
+		{
 			name: "email already exists",
 			request: models.UserRequest{
 				Name:  "Jane Doe",
@@ -137,11 +150,23 @@ func TestUserService_CreateUser(t *testing.T) {
 				assert.Equal(t, tt.request.Name, result.Name)
 				assert.Equal(t, tt.request.Email, result.Email)
 				assert.Equal(t, tt.request.Age, result.Age)
+
+				// Check IsActive handling
+				if tt.request.IsActive != nil {
+					assert.Equal(t, *tt.request.IsActive, result.IsActive)
+				} else {
+					assert.True(t, result.IsActive) // Default is true
+				}
 			}
 
 			mockRepo.AssertExpectations(t)
 		})
 	}
+}
+
+// Helper function to create bool pointer
+func boolPtr(b bool) *bool {
+	return &b
 }
 
 func TestUserService_GetUserByID(t *testing.T) {
@@ -205,13 +230,15 @@ func TestUserService_GetUserByID(t *testing.T) {
 
 func TestUserService_GetAllUsers(t *testing.T) {
 	tests := []struct {
-		name       string
-		page       int
-		pageSize   int
-		mockUsers  []models.User
-		mockCount  int64
-		mockError  error
-		countError error
+		name              string
+		page              int
+		pageSize          int
+		mockUsers         []models.User
+		mockCount         int64
+		mockError         error
+		countError        error
+		expectGetAllError bool
+		expectCountError  bool
 	}{
 		{
 			name:     "successful retrieval",
@@ -234,6 +261,59 @@ func TestUserService_GetAllUsers(t *testing.T) {
 			mockError:  nil,
 			countError: nil,
 		},
+		{
+			name:     "page less than 1",
+			page:     0,
+			pageSize: 10,
+			mockUsers: []models.User{
+				{ID: 1, Name: "John Doe", Email: "john@example.com", Age: 30, IsActive: true},
+			},
+			mockCount:  1,
+			mockError:  nil,
+			countError: nil,
+		},
+		{
+			name:     "pageSize less than 1",
+			page:     1,
+			pageSize: 0,
+			mockUsers: []models.User{
+				{ID: 1, Name: "John Doe", Email: "john@example.com", Age: 30, IsActive: true},
+			},
+			mockCount:  1,
+			mockError:  nil,
+			countError: nil,
+		},
+		{
+			name:     "pageSize greater than 100",
+			page:     1,
+			pageSize: 200,
+			mockUsers: []models.User{
+				{ID: 1, Name: "John Doe", Email: "john@example.com", Age: 30, IsActive: true},
+			},
+			mockCount:  1,
+			mockError:  nil,
+			countError: nil,
+		},
+		{
+			name:              "GetAll error",
+			page:              1,
+			pageSize:          10,
+			mockUsers:         []models.User{},
+			mockCount:         0,
+			mockError:         errors.New("database connection failed"),
+			countError:        nil,
+			expectGetAllError: true,
+		},
+		{
+			name:             "Count error",
+			page:             1,
+			pageSize:         10,
+			mockUsers:        []models.User{{ID: 1, Name: "John", Email: "john@example.com", Age: 30}},
+			mockCount:        0,
+			mockError:        nil,
+			countError:       errors.New("count failed"),
+			expectCountError: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -242,20 +322,44 @@ func TestUserService_GetAllUsers(t *testing.T) {
 			mockRepo := new(MockUserRepository)
 			userService := service.NewUserService(mockRepo, nil)
 
-			// Calculate expected offset
-			offset := (tt.page - 1) * tt.pageSize
+			// Calculate expected offset and page size
+			expectedPage := tt.page
+			expectedPageSize := tt.pageSize
+
+			if expectedPage < 1 {
+				expectedPage = 1
+			}
+			if expectedPageSize < 1 || expectedPageSize > 100 {
+				expectedPageSize = 10
+			}
+
+			offset := (expectedPage - 1) * expectedPageSize
 
 			// Mock setup
-			mockRepo.On("GetAll", offset, tt.pageSize).Return(tt.mockUsers, tt.mockError)
-			mockRepo.On("Count").Return(tt.mockCount, tt.countError)
+			mockRepo.On("GetAll", offset, expectedPageSize).Return(tt.mockUsers, tt.mockError)
+			if !tt.expectGetAllError {
+				mockRepo.On("Count").Return(tt.mockCount, tt.countError)
+			}
 
 			// Execute
 			result, total, err := userService.GetAllUsers(tt.page, tt.pageSize)
 
 			// Assertions
-			assert.NoError(t, err)
-			assert.Equal(t, len(tt.mockUsers), len(result))
-			assert.Equal(t, tt.mockCount, total)
+			if tt.expectGetAllError {
+				assert.Error(t, err)
+				assert.Nil(t, result)
+				assert.Equal(t, int64(0), total)
+				assert.Contains(t, err.Error(), "failed to get users:")
+			} else if tt.expectCountError {
+				assert.Error(t, err)
+				assert.Nil(t, result)
+				assert.Equal(t, int64(0), total)
+				assert.Contains(t, err.Error(), "failed to count users:")
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, len(tt.mockUsers), len(result))
+				assert.Equal(t, tt.mockCount, total)
+			}
 
 			mockRepo.AssertExpectations(t)
 		})
@@ -299,6 +403,40 @@ func TestUserService_UpdateUser(t *testing.T) {
 			expectedError: false,
 		},
 		{
+			name:   "update with same email (no check needed)",
+			userID: 1,
+			request: models.UserRequest{
+				Name:    "John Updated",
+				Email:   "john@example.com", // Same email
+				Age:     31,
+				Phone:   "1234567890",
+				Address: "456 New St",
+			},
+			existingUser: &models.User{
+				ID:       1,
+				Name:     "John Doe",
+				Email:    "john@example.com",
+				Age:      30,
+				IsActive: true,
+			},
+			existingErr:   nil,
+			updateErr:     nil,
+			expectedError: false,
+		},
+		{
+			name:   "user not found for update",
+			userID: 999,
+			request: models.UserRequest{
+				Name:  "Non Existent",
+				Email: "nonexistent@example.com",
+				Age:   30,
+			},
+			existingUser:   nil,
+			existingErr:    errors.New("user not found"),
+			expectedError:  true,
+			expectedErrMsg: "user not found",
+		},
+		{
 			name:   "email already exists for different user",
 			userID: 1,
 			request: models.UserRequest{
@@ -320,6 +458,28 @@ func TestUserService_UpdateUser(t *testing.T) {
 			expectedError:  true,
 			expectedErrMsg: "user with email existing@example.com already exists",
 		},
+		{
+			name:   "update database error",
+			userID: 1,
+			request: models.UserRequest{
+				Name:  "John Updated",
+				Email: "john.updated@example.com",
+				Age:   31,
+			},
+			existingUser: &models.User{
+				ID:       1,
+				Name:     "John Doe",
+				Email:    "john@example.com",
+				Age:      30,
+				IsActive: true,
+			},
+			existingErr:    nil,
+			emailUser:      nil,
+			emailErr:       errors.New("user not found"),
+			updateErr:      errors.New("database update failed"),
+			expectedError:  true,
+			expectedErrMsg: "failed to update user:",
+		},
 	}
 
 	for _, tt := range tests {
@@ -333,7 +493,8 @@ func TestUserService_UpdateUser(t *testing.T) {
 			if tt.existingUser != nil && tt.existingUser.Email != tt.request.Email {
 				mockRepo.On("GetByEmail", tt.request.Email).Return(tt.emailUser, tt.emailErr)
 			}
-			if !tt.expectedError {
+			// Add Update expectation for cases where we reach the update step
+			if tt.existingUser != nil && (tt.emailUser == nil || tt.emailErr != nil) {
 				mockRepo.On("Update", mock.AnythingOfType("*models.User")).Return(tt.updateErr)
 			}
 

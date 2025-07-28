@@ -20,8 +20,10 @@ test: ## Run unit tests
 	go test -v ./tests/...
 
 test-coverage: ## Run tests with coverage
-	go test -v -coverprofile=coverage.out ./tests/...
+	go test -coverprofile=coverage.out ./...
+	go tool cover -func=coverage.out
 	go tool cover -html=coverage.out -o coverage.html
+	open coverage.html
 
 lint: ## Run linting
 	@if command -v golangci-lint >/dev/null 2>&1; then \
@@ -74,11 +76,6 @@ clean: ## Clean build artifacts
 	rm -rf bin/
 	rm -f coverage.out coverage.html
 	go clean
-
-# Database operations
-db-reset: ## Reset database (WARNING: This will delete all data)
-	docker-compose exec db psql -U postgres -d users_db -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-	$(MAKE) migrate
 
 # API testing
 api-test: ## Test API endpoints (requires running server)

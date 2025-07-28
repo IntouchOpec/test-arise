@@ -261,6 +261,14 @@ func TestUserController_GetUsers(t *testing.T) {
 			mockError:      nil,
 			expectedStatus: http.StatusOK,
 		},
+		{
+			name:           "service error",
+			queryParams:    "",
+			mockUsers:      nil,
+			mockTotal:      0,
+			mockError:      errors.New("database error"),
+			expectedStatus: http.StatusInternalServerError,
+		},
 	}
 
 	for _, tt := range tests {
@@ -298,8 +306,13 @@ func TestUserController_GetUsers(t *testing.T) {
 			err := json.Unmarshal(w.Body.Bytes(), &response)
 			assert.NoError(t, err)
 
-			assert.Contains(t, response, "data")
-			assert.Contains(t, response, "pagination")
+			if tt.mockError != nil {
+				assert.Contains(t, response, "error")
+				assert.Equal(t, tt.mockError.Error(), response["error"])
+			} else {
+				assert.Contains(t, response, "data")
+				assert.Contains(t, response, "pagination")
+			}
 
 			mockService.AssertExpectations(t)
 		})
