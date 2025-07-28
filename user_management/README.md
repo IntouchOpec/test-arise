@@ -63,7 +63,7 @@ user_management/
 
 ### Prerequisites
 
-- Go 1.21.5 or higher
+- Go 1.23.5 or higher
 - Docker and Docker Compose
 - Make (optional, for using Makefile commands)
 
